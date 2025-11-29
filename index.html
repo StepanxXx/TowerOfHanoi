@@ -120,6 +120,17 @@
       background-repeat: no-repeat;
     }
 
+    input[type="number"] {
+      width: 80px;
+      background: #020617;
+      color: var(--text-main);
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      padding: 4px 10px;
+      font-size: 0.9rem;
+      outline: none;
+    }
+
     button {
       border-radius: 999px;
       border: 1px solid var(--accent);
@@ -148,6 +159,13 @@
     button:active {
       transform: translateY(0);
       box-shadow: none;
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      box-shadow: none;
+      transform: none;
     }
 
     .toolbar-right span {
@@ -323,6 +341,37 @@
       white-space: nowrap;
     }
 
+    .rules {
+      margin-top: 16px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: rgba(15, 23, 42, 0.9);
+      border: 1px dashed var(--border);
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+
+    .rules h2 {
+      margin: 0 0 6px;
+      font-size: 0.95rem;
+      color: var(--text-main);
+    }
+
+    .rules ol {
+      margin: 0 0 6px 18px;
+      padding: 0;
+    }
+
+    .rules li {
+      margin-bottom: 4px;
+    }
+
+    .rules-note {
+      margin: 0;
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+
     @media (max-width: 700px) {
       .card {
         padding: 16px 12px 20px;
@@ -367,21 +416,20 @@
       </h1>
       <div class="subtitle">
         Клікніть по вежі-джерелу, потім по цільовій вежі. Не кладіть більший диск на менший.
+        Для демонстрації оптимального рішення використовуйте автосолвер.
       </div>
 
       <div class="toolbar">
         <div class="toolbar-left">
-          <label for="diskCount">Кількість дисків:</label>
-          <select id="diskCount">
-            <option value="3">3</option>
-            <option value="4" selected>4</option>
-            <option value="5">5</option>
-            <option value="6">6</option>
-            <option value="7">7</option>
-          </select>
+          <label for="diskCount">Кількість дисків (1–15):</label>
+          <input id="diskCount" type="number" min="1" max="15" value="4" />
 
           <button id="resetBtn" type="button">
             ⟲ Перезапустити гру
+          </button>
+
+          <button id="solveBtn" type="button">
+            ▶ Автосолвер (оптимальне рішення)
           </button>
         </div>
 
@@ -426,6 +474,20 @@
         <span>Мета: перенести всі диски з вежі 1 на вежу 3.</span>
         <span>Оптимальна стратегія = 2ⁿ − 1 ходів.</span>
       </div>
+
+      <div class="rules">
+        <h2>Правила гри</h2>
+        <ol>
+          <li>Є три вежі та N дисків різного розміру.</li>
+          <li>Спочатку всі диски знаходяться на першій вежі, від найбільшого (знизу) до найменшого (зверху).</li>
+          <li>За один хід можна перенести тільки один верхній диск з будь-якої вежі на іншу.</li>
+          <li>Заборонено класти більший диск на менший.</li>
+          <li>Мета – перенести всі диски з вежі 1 на вежу 3, дотримуючись цих правил.</li>
+        </ol>
+        <p class="rules-note">
+          Автосолвер демонструє оптимальне рішення з початкової конфігурації (усі диски на вежі 1).
+        </p>
+      </div>
     </div>
   </div>
 
@@ -437,9 +499,15 @@
       let moveCount = 0;
       let selectedTowerIndex = null;
 
+      let autoSolving = false;
+      let autoMoves = [];
+      let autoMoveIndex = 0;
+      let autoTimer = null;
+
       const towerElements = Array.from(document.querySelectorAll(".tower"));
-      const diskSelect = document.getElementById("diskCount");
+      const diskCountInput = document.getElementById("diskCount");
       const resetBtn = document.getElementById("resetBtn");
+      const solveBtn = document.getElementById("solveBtn");
       const movesEl = document.getElementById("moves");
       const optimalEl = document.getElementById("optimal");
       const messageEl = document.getElementById("message");
@@ -462,6 +530,19 @@
       function updateOptimalMoves() {
         const optimal = Math.pow(2, numDisks) - 1;
         optimalEl.textContent = optimal;
+      }
+
+      function updateUIForSolver(isRunning) {
+        autoSolving = isRunning;
+        if (isRunning) {
+          solveBtn.textContent = "■ Зупинити автосолвер";
+          diskCountInput.disabled = true;
+          resetBtn.disabled = true;
+        } else {
+          solveBtn.textContent = "▶ Автосолвер (оптимальне рішення)";
+          diskCountInput.disabled = false;
+          resetBtn.disabled = false;
+        }
       }
 
       function render() {
@@ -489,7 +570,23 @@
       }
 
       function initGame() {
-        numDisks = parseInt(diskSelect.value, 10);
+        // очищення автосолвера при перезапуску
+        if (autoTimer) {
+          clearInterval(autoTimer);
+          autoTimer = null;
+        }
+        autoMoves = [];
+        autoMoveIndex = 0;
+        updateUIForSolver(false);
+
+        let value = parseInt(diskCountInput.value, 10);
+        if (isNaN(value)) {
+          value = 3;
+        }
+        value = Math.max(1, Math.min(15, value));
+        diskCountInput.value = value;
+        numDisks = value;
+
         towers[0] = [];
         towers[1] = [];
         towers[2] = [];
@@ -520,10 +617,61 @@
         }
       }
 
+      function performMove(sourceIndex, targetIndex, options = {}) {
+        const { fromSolver = false, skipCheckWin = false, skipMessage = false } =
+          options;
+
+        const sourceTower = towers[sourceIndex];
+        const targetTower = towers[targetIndex];
+
+        if (!sourceTower || !targetTower) {
+          return false;
+        }
+
+        if (sourceTower.length === 0) {
+          if (!fromSolver) {
+            setMessage("На обраній вежі немає дисків.", "error");
+          }
+          return false;
+        }
+
+        const movingDisk = sourceTower[sourceTower.length - 1];
+        const targetTopDisk = targetTower[targetTower.length - 1];
+
+        if (typeof targetTopDisk !== "undefined" && targetTopDisk < movingDisk) {
+          if (!fromSolver) {
+            setMessage(
+              "Неможливий хід: більший диск не можна класти на менший.",
+              "error"
+            );
+          }
+          return false;
+        }
+
+        sourceTower.pop();
+        targetTower.push(movingDisk);
+        moveCount += 1;
+        updateMoves();
+        render();
+
+        if (!skipMessage) {
+          setMessage("");
+        }
+        if (!skipCheckWin) {
+          checkWin();
+        }
+
+        return true;
+      }
+
       function handleTowerClick(index) {
+        if (autoSolving) {
+          // під час автосолвера ручні дії ігноруємо
+          return;
+        }
+
         const tower = towers[index];
 
-        // Якщо ще нічого не вибрано — обираємо вежу-джерело
         if (selectedTowerIndex === null) {
           if (tower.length === 0) {
             setMessage(
@@ -540,7 +688,6 @@
           return;
         }
 
-        // Клік по тій самій вежі — скасування вибору
         if (selectedTowerIndex === index) {
           selectedTowerIndex = null;
           setMessage("Вибір вежі скасовано.");
@@ -550,39 +697,77 @@
 
         const sourceIndex = selectedTowerIndex;
         const targetIndex = index;
-        const sourceTower = towers[sourceIndex];
-        const targetTower = towers[targetIndex];
 
-        if (sourceTower.length === 0) {
-          selectedTowerIndex = null;
-          setMessage("На обраній вежі немає дисків.", "error");
-          render();
-          return;
-        }
-
-        const movingDisk = sourceTower[sourceTower.length - 1];
-        const targetTopDisk = targetTower[targetTower.length - 1];
-
-        if (typeof targetTopDisk !== "undefined" && targetTopDisk < movingDisk) {
-          selectedTowerIndex = null;
-          setMessage(
-            "Неможливий хід: більший диск не можна класти на менший.",
-            "error"
-          );
-          render();
-          return;
-        }
-
-        // Валідний хід
-        sourceTower.pop();
-        targetTower.push(movingDisk);
-        moveCount += 1;
+        const moved = performMove(sourceIndex, targetIndex);
         selectedTowerIndex = null;
 
-        updateMoves();
-        setMessage("");
-        render();
-        checkWin();
+        if (!moved) {
+          render();
+        }
+      }
+
+      function generateSolution(n, from, to, aux, moves) {
+        if (n === 1) {
+          moves.push([from, to]);
+          return;
+        }
+        generateSolution(n - 1, from, aux, to, moves);
+        moves.push([from, to]);
+        generateSolution(n - 1, aux, to, from, moves);
+      }
+
+      function startAutoSolve() {
+        // завжди починаємо з початкової конфігурації для оптимального шляху
+        initGame();
+
+        autoMoves = [];
+        autoMoveIndex = 0;
+        generateSolution(numDisks, 0, 2, 1, autoMoves);
+
+        if (autoMoves.length === 0) {
+          return;
+        }
+
+        updateUIForSolver(true);
+        setMessage("Автосолвер демонструє оптимальне рішення…");
+
+        autoTimer = setInterval(() => {
+          if (autoMoveIndex >= autoMoves.length) {
+            clearInterval(autoTimer);
+            autoTimer = null;
+            updateUIForSolver(false);
+            checkWin();
+            setMessage(
+              `Автосолвер завершив оптимальне рішення за ${moveCount} ходів із мінімально можливих ${Math.pow(
+                2,
+                numDisks
+              ) - 1}.`,
+              "win"
+            );
+            return;
+          }
+
+          const [from, to] = autoMoves[autoMoveIndex++];
+          performMove(from, to, {
+            fromSolver: true,
+            skipCheckWin: true,
+            skipMessage: true,
+          });
+        }, 600);
+      }
+
+      function stopAutoSolve(manual = false) {
+        if (autoTimer) {
+          clearInterval(autoTimer);
+          autoTimer = null;
+        }
+        autoMoves = [];
+        autoMoveIndex = 0;
+        updateUIForSolver(false);
+
+        if (manual) {
+          setMessage("Автосолвер зупинено. Ви можете продовжити гру вручну.");
+        }
       }
 
       // Події
@@ -594,8 +779,16 @@
         initGame();
       });
 
-      diskSelect.addEventListener("change", () => {
+      diskCountInput.addEventListener("change", () => {
         initGame();
+      });
+
+      solveBtn.addEventListener("click", () => {
+        if (autoSolving) {
+          stopAutoSolve(true);
+        } else {
+          startAutoSolve();
+        }
       });
 
       // Ініціалізація
